@@ -29,6 +29,8 @@ fn main() {
     let interval = 10.;
     let path = socket_path();
     let clamp = true;
+    let verbose = false;
+    let print_timings = false;
 
     let mut ml = libpulse_binding::mainloop::threaded::Mainloop::new()
         .expect("failed to create a libpulse Mainloop");
@@ -45,11 +47,7 @@ fn main() {
         .expect("failed to create a libpulse Context");
     let (tx, rx) = mpsc::channel();
 
-    ctx.set_event_callback(Some(Box::new(move |s, prop| {
-        println!("event {s} {prop:?}");
-    })));
     ctx.set_state_callback(Some(Box::new(move || {
-        println!("change");
         tx.send(()).unwrap();
     })));
 
@@ -61,9 +59,8 @@ fn main() {
     loop {
         // wait for connection
         rx.recv().unwrap();
-        println!("change {:?}", ctx.get_state());
+        println!("State change: {:?}", ctx.get_state());
         if let State::Ready = ctx.get_state() {
-            println!("Is good");
             break;
         }
     }
@@ -75,7 +72,7 @@ fn main() {
     let mut iterations = 0_u32;
 
     let mut sink = get_default_sink(&ctx);
-    println!("Got sink");
+    println!("Got sink.");
     let mut channels = sink.as_ref().and_then(|sink| get_channels(sink, &ctx));
     let mut sink_last_changed = Instant::now();
 
@@ -123,16 +120,22 @@ fn main() {
 
     loop {
         let change = if volume.is_none() {
-            println!("Waiting for command.");
+            if verbose {
+                println!("Waiting for command.");
+            }
             Some(rx_change_volume.recv().unwrap())
         } else {
             rx_change_volume.try_recv().ok()
         };
         let start = Instant::now();
         if let Some(change) = change {
-            println!("Change volume!");
+            if verbose {
+                println!("Change volume!");
+            }
             if sink.is_none() || sink_last_changed.elapsed() > Duration::from_secs(1) {
-                println!("QUERY SINK");
+                if verbose {
+                    println!("QUERY SINK");
+                }
                 sink = get_default_sink(&ctx);
                 sink_last_changed = Instant::now();
             }
@@ -150,10 +153,12 @@ fn main() {
                     step = Some((target_volume - i_volume) / (duration / interval));
                     iterations = 0;
                     channels = Some(chs);
-                    println!(
-                        "Initial {i_volume} => {target_volume} by steps {}",
-                        step.unwrap()
-                    );
+                    if verbose {
+                        println!(
+                            "Initial {i_volume} => {target_volume} by steps {}",
+                            step.unwrap()
+                        );
+                    }
                 } else {
                     eprintln!("The volume of the default sink couldn't be found.");
                     continue;
@@ -182,7 +187,9 @@ fn main() {
             volume = None;
         }
         let loop_duration = start.elapsed();
-        // println!("Loop took {loop_duration:?}");
+        if print_timings {
+            println!("Loop took {loop_duration:?}");
+        }
         thread::sleep(Duration::from_secs_f64(interval / 1e3).saturating_sub(loop_duration));
     }
 }
