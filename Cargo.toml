@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "daemon",
+    "client",
+]
+
+[profile.distribution]
+inherits = "release"
+lto = true
+strip = true
