@@ -22,8 +22,7 @@ VOLUME:
     If prepended by a `+` or `-`, the volume change is relative.
 
 PATH:
-    An optional path to the pasvd socket. Default to the user's run directory.
-\
+    An optional path to the pasvd socket. Default to the user's run directory.\
         "
         );
         process::exit(1);
@@ -44,7 +43,10 @@ PATH:
     let mut s = match s {
         Ok(s) => s,
         Err(err) => {
-            eprintln!("pasvd is maybe not running.\nFailed to connect to {}: {err}", path.display());
+            eprintln!(
+                "pasvd is maybe not running.\nFailed to connect to {}: {err}",
+                path.display()
+            );
             process::exit(1);
         }
     };

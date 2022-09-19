@@ -171,13 +171,15 @@ fn main() {
         if let (Some(target), Some(initial_volume), Some(step), Some(sink), Some(channels)) =
             (volume, initial_volume, step, &sink, channels)
         {
-            let v = initial_volume + step * iterations as f64;
+            let mut v = initial_volume + step * iterations as f64;
             if step.is_sign_positive() {
                 if v >= target {
                     volume = None;
+                    v = target;
                 }
             } else if v <= target {
                 volume = None;
+                v = target;
             }
 
             set_volume(sink, channels, v, &ctx);
