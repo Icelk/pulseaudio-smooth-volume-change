@@ -28,58 +28,20 @@ impl ChangeVolume {
 fn command() -> clap::Command<'static> {
     let cmd: clap::Command<'static> = clap::command!();
     cmd.arg(
-        Arg::new("duration")
-            .long("duration")
-            .short('d')
-            .default_value("150")
-            .help("Duration of volume change in milliseconds.")
-            .value_parser(clap::value_parser!(u64)),
-    )
-    .arg(
         Arg::new("interval")
-            .long("interval")
-            .short('i')
             .default_value("10")
             .help("Interval between volume changes in milliseconds.")
             .value_parser(clap::value_parser!(u64)),
     )
-    .arg(
-        Arg::new("path")
-            .long("path")
-            .short('p')
-            .help(
-                "Path to bind the command receiving UNIX socket to. \
-                Defaults to `/run/user/<uid>/pasvd`.",
-            )
-            .takes_value(true),
-    )
-    .arg(
-        Arg::new("no-clamp")
-            .long("no-clamp")
-            .help("Don't clamp volume range to 100%."),
-    )
-    .arg(
-        Arg::new("verbose")
-            .long("verbose")
-            .help("Print more information of the Pulseaudio operations."),
-    )
-    .arg(Arg::new("print-timings").long("print-timings").help(
-        "Print timing information. Useful \
-        for performance debugging regarding slow Pulseaudio callbacks.",
-    ))
 }
 
 fn main() {
-    let cmd = command();
-    let matches = cmd.get_matches();
-    let duration = Duration::from_millis(*matches.get_one("duration").unwrap());
-    let interval = Duration::from_millis(*matches.get_one("interval").unwrap());
-    let path = matches
-        .get_one::<&str>("path")
-        .map_or_else(socket_path, std::path::PathBuf::from);
-    let clamp = !matches.contains_id("no-clamp");
-    let verbose = matches.contains_id("verbose");
-    let print_timings = matches.contains_id("print-timings");
+    let duration = 100.;
+    let interval = 10.;
+    let path = socket_path();
+    let clamp = true;
+    let verbose = false;
+    let print_timings = false;
 
     let mut ml = libpulse_binding::mainloop::threaded::Mainloop::new()
         .expect("failed to create a libpulse Mainloop");
@@ -199,10 +161,7 @@ fn main() {
                     }
                     volume = Some(target_volume);
                     initial_volume = Some(i_volume);
-                    step = Some(
-                        (target_volume - i_volume)
-                            / (duration.as_millis() / interval.as_millis()) as f64,
-                    );
+                    step = Some((target_volume - i_volume) / (duration / interval));
                     iterations = 0;
                     channels = Some(chs);
                     if verbose {
@@ -244,7 +203,7 @@ fn main() {
         if print_timings {
             println!("Loop took {loop_duration:?}");
         }
-        thread::sleep(interval.saturating_sub(loop_duration));
+        thread::sleep(Duration::from_secs_f64(interval / 1e3).saturating_sub(loop_duration));
     }
 }
 
