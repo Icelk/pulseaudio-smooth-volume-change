@@ -27,7 +27,10 @@ impl ChangeVolume {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Change(ChangeVolume),
+    Change {
+        volume: ChangeVolume,
+        duration: Option<f64>,
+    },
     GetVolume(mpsc::SyncSender<Option<f64>>),
 }
 
@@ -144,7 +147,7 @@ fn main() {
                     eprintln!("Failed to read target volume from socket: {err}");
                     continue;
                 };
-                let trimmed = buf.trim();
+                let mut trimmed = buf.trim();
                 if trimmed == "get-volume" {
                     let (tx, rx) = mpsc::sync_channel(1);
                     change_volume.send(Message::GetVolume(tx)).unwrap();
@@ -155,6 +158,12 @@ fn main() {
                     }
                     continue;
                 }
+                let duration: Option<f64> = if let Some((v, duration)) = trimmed.split_once(' ') {
+                    trimmed = v.trim();
+                    duration.parse().ok()
+                } else {
+                    None
+                };
                 let relative = trimmed.starts_with('+') || trimmed.starts_with('-');
                 let num = if relative { &trimmed[1..] } else { trimmed };
                 let percent = num.ends_with('%');
@@ -179,7 +188,12 @@ fn main() {
                     ChangeVolume::Absolute(target)
                 };
 
-                change_volume.send(Message::Change(v)).unwrap();
+                change_volume
+                    .send(Message::Change {
+                        volume: v,
+                        duration,
+                    })
+                    .unwrap();
             }
             process::exit(0);
         });
@@ -196,7 +210,10 @@ fn main() {
         };
         let start = Instant::now();
         match message {
-            Some(Message::Change(change)) => {
+            Some(Message::Change {
+                volume: change,
+                duration: user_duration,
+            }) => {
                 if verbose {
                     println!("Change volume!");
                 }
@@ -218,10 +235,20 @@ fn main() {
                         }
                         volume = Some(target_volume);
                         initial_volume = Some(i_volume);
-                        step = Some(
-                            (target_volume - i_volume)
-                                / (duration.as_millis() / interval.as_millis()) as f64,
-                        );
+                        let used_duration = match user_duration {
+                            Some(d) if (0.0..=1e9).contains(&d) => {
+                                Duration::from_secs_f64(d * 1e-3)
+                            }
+                            _ => duration,
+                        };
+                        if used_duration <= interval {
+                            step = Some(target_volume - i_volume)
+                        } else {
+                            step = Some(
+                                (target_volume - i_volume)
+                                    / (used_duration.as_millis() / interval.as_millis()) as f64,
+                            );
+                        }
                         iterations = 0;
                         channels = Some(chs);
                         if verbose {
