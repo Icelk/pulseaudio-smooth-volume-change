@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::mpsc;
@@ -23,6 +23,12 @@ impl ChangeVolume {
             ChangeVolume::Absolute(a) => a,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Change(ChangeVolume),
+    GetVolume(mpsc::SyncSender<Option<f64>>),
 }
 
 fn command() -> clap::Command<'static> {
@@ -138,21 +144,33 @@ fn main() {
                     eprintln!("Failed to read target volume from socket: {err}");
                     continue;
                 };
-                let relative = buf.trim().starts_with('+') || buf.trim().starts_with('-');
-                let num = if relative {
-                    &buf.trim()[1..]
-                } else {
-                    buf.trim()
-                };
-                let target: f64 = if let Ok(v) = num.parse() {
+                let trimmed = buf.trim();
+                if trimmed == "get-volume" {
+                    let (tx, rx) = mpsc::sync_channel(1);
+                    change_volume.send(Message::GetVolume(tx)).unwrap();
+                    let v = rx.recv().unwrap();
+                    if let Some(v) = v {
+                        let s = format!("{:.2}%", v * 100.);
+                        let _ = stream.write_all(s.as_bytes());
+                    }
+                    continue;
+                }
+                let relative = trimmed.starts_with('+') || trimmed.starts_with('-');
+                let num = if relative { &trimmed[1..] } else { trimmed };
+                let percent = num.ends_with('%');
+                let num = num.strip_suffix('%').unwrap_or(num);
+                let mut target: f64 = if let Ok(v) = num.parse() {
                     v
                 } else {
                     eprintln!("Failed to parse volume command from socket.");
                     continue;
                 };
+                if percent {
+                    target /= 100.;
+                }
 
                 let v = if relative {
-                    if buf.trim().starts_with('+') {
+                    if trimmed.starts_with('+') {
                         ChangeVolume::Increase(target)
                     } else {
                         ChangeVolume::Increase(-target)
@@ -161,14 +179,14 @@ fn main() {
                     ChangeVolume::Absolute(target)
                 };
 
-                change_volume.send(v).unwrap();
+                change_volume.send(Message::Change(v)).unwrap();
             }
             process::exit(0);
         });
     }
 
     loop {
-        let change = if volume.is_none() {
+        let message = if volume.is_none() {
             if verbose {
                 println!("Waiting for command.");
             }
@@ -177,48 +195,63 @@ fn main() {
             rx_change_volume.try_recv().ok()
         };
         let start = Instant::now();
-        if let Some(change) = change {
-            if verbose {
-                println!("Change volume!");
-            }
-            if sink.is_none() || sink_last_changed.elapsed() > Duration::from_secs(1) {
+        match message {
+            Some(Message::Change(change)) => {
                 if verbose {
-                    println!("QUERY SINK");
+                    println!("Change volume!");
                 }
-                sink = get_default_sink(&ctx);
-                sink_last_changed = Instant::now();
-            }
-            if let Some(sink) = &sink {
-                if let Some((v, _sink_idx, chs)) = get_volume(sink, &ctx) {
-                    let i_volume = vol_to_linear(v.max());
-                    let mut target_volume = change
-                        .collapse(if let Some(v) = volume { v } else { i_volume })
-                        .max(0.);
-                    if clamp {
-                        target_volume = target_volume.min(1.);
-                    }
-                    volume = Some(target_volume);
-                    initial_volume = Some(i_volume);
-                    step = Some(
-                        (target_volume - i_volume)
-                            / (duration.as_millis() / interval.as_millis()) as f64,
-                    );
-                    iterations = 0;
-                    channels = Some(chs);
+                if sink.is_none() || sink_last_changed.elapsed() > Duration::from_secs(1) {
                     if verbose {
-                        println!(
-                            "Initial {i_volume} => {target_volume} by steps {}",
-                            step.unwrap()
+                        println!("QUERY SINK");
+                    }
+                    sink = get_default_sink(&ctx);
+                    sink_last_changed = Instant::now();
+                }
+                if let Some(sink) = &sink {
+                    if let Some((v, _sink_idx, chs)) = get_volume(sink, &ctx) {
+                        let i_volume = vol_to_linear(v.max());
+                        let mut target_volume = change
+                            .collapse(if let Some(v) = volume { v } else { i_volume })
+                            .max(0.);
+                        if clamp {
+                            target_volume = target_volume.min(1.);
+                        }
+                        volume = Some(target_volume);
+                        initial_volume = Some(i_volume);
+                        step = Some(
+                            (target_volume - i_volume)
+                                / (duration.as_millis() / interval.as_millis()) as f64,
                         );
+                        iterations = 0;
+                        channels = Some(chs);
+                        if verbose {
+                            println!(
+                                "Initial {i_volume} => {target_volume} by steps {}",
+                                step.unwrap()
+                            );
+                        }
+                    } else {
+                        eprintln!("The volume of the default sink couldn't be found.");
+                        continue;
                     }
                 } else {
-                    eprintln!("The volume of the default sink couldn't be found.");
+                    eprintln!("No default sink was found.");
                     continue;
                 }
-            } else {
-                eprintln!("No default sink was found.");
-                continue;
             }
+            Some(Message::GetVolume(tx)) => {
+                if verbose {
+                    println!("Get volume");
+                }
+                if let Some(sink) = &sink {
+                    let v = get_volume(sink, &ctx);
+                    tx.send(v.map(|(chw, _, _)| vol_to_linear(chw.avg())))
+                        .unwrap();
+                } else {
+                    tx.send(None).unwrap();
+                }
+            }
+            None => {}
         }
         if let (Some(target), Some(initial_volume), Some(step), Some(sink), Some(channels)) =
             (volume, initial_volume, step, &sink, channels)
