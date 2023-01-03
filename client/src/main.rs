@@ -46,7 +46,13 @@ fn main() {
         }
         match arg.as_str() {
             "--help" => print_help(),
-            "--get-volume" | "-g" => get_volume = true,
+            "--get-volume" | "-g" => {
+                if path.is_some() {
+                    arg_invalid_exit("Only one argument is valid.")
+                } else {
+                    get_volume = true
+                }
+            }
             "--duration" | "-d" => next_is_duration = true,
             _ if arg.starts_with('-')
                 // and not a number (negative numbers)
@@ -59,6 +65,7 @@ fn main() {
             {
                 arg_invalid_exit(format!("Unrecognised argument: {arg}."))
             }
+            _ if volume.is_some() && get_volume => arg_invalid_exit("Only one argument is valid."),
             _ if volume.is_some() && path.is_some() => {
                 arg_invalid_exit("Only two arguments are valid.")
             }
@@ -70,6 +77,10 @@ fn main() {
         arg_invalid_exit("--duration takes a value");
     }
 
+    let path = (if get_volume { &volume } else { &path })
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(socket_path);
     let v = if let Some(v) = volume {
         v
     } else if get_volume {
@@ -80,9 +91,6 @@ fn main() {
             and mean the same thing) as the first argument.",
         );
     };
-    let path = path
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(socket_path);
     let s = UnixStream::connect(&path);
     let mut s = match s {
         Ok(s) => s,
